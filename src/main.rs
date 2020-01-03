@@ -222,14 +222,11 @@ where
             }
         }
 
-        {
-            let inner = unsafe { self.map_unchecked_mut(|x| &mut x.f2) };
-            match inner.poll(cx) {
-                Poll::Ready(x) => return Poll::Ready(x),
-                Poll::Pending => (),
-            }
+        let inner = unsafe { self.map_unchecked_mut(|x| &mut x.f2) };
+        match inner.poll(cx) {
+            Poll::Ready(x) => return Poll::Ready(x),
+            Poll::Pending => Poll::Pending,
         }
-        Poll::Pending
     }
 }
 
@@ -283,14 +280,14 @@ fn main() -> FailureOr<()> {
                 .long("log_file")
                 .takes_value(true)
                 .default_value("/tmp/memory.log")
-                .help("File to write the memory log to."),
+                .help("File to write the memory log to"),
         )
         .arg(
             clap::Arg::with_name("log_period")
                 .long("log_period")
                 .takes_value(true)
                 .default_value("0.5")
-                .help("Period at which to log in seconds.")
+                .help("Logging period in seconds")
                 .validator(|s| -> Result<(), String> {
                     let n: f64 = s
                         .parse()
@@ -308,13 +305,13 @@ fn main() -> FailureOr<()> {
                 .takes_value(true)
                 .help(concat!(
                     "Turns on tcmalloc profiling, and causes it to dump profiles to the given ",
-                    "prefix; enables tcmalloc by default"
+                    "prefix; enables tcmalloc"
                 )),
         )
         .arg(
             clap::Arg::with_name("tcmalloc_heap_check")
                 .long("tcmalloc_heap_check")
-                .help("Turns on tcmalloc heap checking; enables tcmalloc by default"),
+                .help("Turns on tcmalloc heap checking; enables tcmalloc"),
         )
         .arg(
             clap::Arg::with_name("use_tcmalloc")
