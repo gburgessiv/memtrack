@@ -125,9 +125,15 @@ struct NewProcess {
 }
 
 #[derive(Serialize)]
+struct PIDMemInfo {
+    mem_info: MemInfo,
+    pid: u32,
+}
+
+#[derive(Serialize)]
 #[serde(tag = "type", content = "value")]
 enum Record {
-    MemInfo(Vec<(u32, MemInfo)>),
+    MemInfo(Vec<PIDMemInfo>),
     NewProcess(NewProcess),
 }
 
@@ -148,7 +154,7 @@ where
             return Ok(());
         }
 
-        let mut mem_map: Vec<(u32, MemInfo)> = Vec::with_capacity(pids.len());
+        let mut mem_map: Vec<PIDMemInfo> = Vec::with_capacity(pids.len());
         let mut newly_added: Vec<NewProcess> = Vec::new();
         for pid in pids {
             if !last_seen_pids.contains(&pid) {
@@ -170,13 +176,13 @@ where
                 });
             }
 
-            mem_map.push((
+            mem_map.push(PIDMemInfo{
                 pid,
-                match read_subprocess_memory_usage(pid) {
+                mem_info: match read_subprocess_memory_usage(pid) {
                     None => continue,
                     Some(m) => m,
                 },
-            ));
+            });
         }
 
         newly_added.sort_by_key(|x| x.pid);
@@ -184,8 +190,8 @@ where
             write_record(Record::NewProcess(proc))?;
         }
 
-        last_seen_pids = mem_map.iter().map(|x| x.0).collect();
-        mem_map.sort_by_key(|x| x.0);
+        last_seen_pids = mem_map.iter().map(|x| x.pid).collect();
+        mem_map.sort_by_key(|x| x.pid);
         write_record(Record::MemInfo(mem_map))?;
         tokio::time::delay_until(next_check.into()).await;
     }
