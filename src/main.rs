@@ -8,13 +8,11 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use failure::bail;
+use errorz::{ErrorOr, tr, tr_format};
 
 use serde::Serialize;
 
-type FailureOr<T> = Result<T, failure::Error>;
-
-fn enumerate_children_of(main_pid: u32) -> FailureOr<Vec<u32>> {
+fn enumerate_children_of(main_pid: u32) -> ErrorOr<Vec<u32>> {
     macro_rules! try_continue {
         ($x:expr) => {{
             match $x {
@@ -23,7 +21,7 @@ fn enumerate_children_of(main_pid: u32) -> FailureOr<Vec<u32>> {
                     if x.kind() == io::ErrorKind::NotFound {
                         continue;
                     }
-                    return Err(x.into());
+                    return tr!(Err(x));
                 }
             }
         }};
@@ -33,7 +31,7 @@ fn enumerate_children_of(main_pid: u32) -> FailureOr<Vec<u32>> {
     let mut ps_map: HashMap<u32, Vec<u32>> = HashMap::with_capacity(2048);
     let mut proc_file_data = [0u8; 256];
     let mut found_main_pid = false;
-    for file in fs::read_dir("/proc")? {
+    for file in tr!(fs::read_dir("/proc")) {
         let file = try_continue!(file);
         let pid = match file
             .file_name()
@@ -50,13 +48,13 @@ fn enumerate_children_of(main_pid: u32) -> FailureOr<Vec<u32>> {
         loc.push("stat");
 
         let mut stat = try_continue!(fs::File::open(loc));
-        let n = stat.read(&mut proc_file_data)?;
+        let n = tr!(stat.read(&mut proc_file_data));
         let proc_file_data = &proc_file_data[..n];
 
         // ${pid} (${name}) ${status} ${ppid} ${pgid} ...
         // Start with the last paren
         let last_paren = match memchr::memrchr(b')', proc_file_data) {
-            None => bail!("no end paren found in data for {:?}", file.path()),
+            None => return Err(tr_format!("no end paren found in data for {:?}", file.path())),
             Some(x) => x,
         };
 
@@ -66,7 +64,7 @@ fn enumerate_children_of(main_pid: u32) -> FailureOr<Vec<u32>> {
             .and_then(|x| std::str::from_utf8(x).ok())
             .and_then(|x| x.parse::<u32>().ok())
         {
-            None => bail!("short read or invalid ppid for {:?}", file.path()),
+            None => return Err(tr_format!("short read or invalid ppid for {:?}", file.path())),
             Some(x) => x,
         };
 
@@ -126,6 +124,7 @@ struct NewProcess {
 
 #[derive(Serialize)]
 struct PIDMemInfo {
+    #[serde(flatten)]
     mem_info: MemInfo,
     pid: u32,
 }
@@ -133,7 +132,12 @@ struct PIDMemInfo {
 #[derive(Serialize)]
 #[serde(tag = "type", content = "value")]
 enum Record {
-    MemInfo(Vec<PIDMemInfo>),
+    #[serde(rename = "mem_info")]
+    MemInfo{
+        millis_elapsed: u64,
+        processes: Vec<PIDMemInfo>,
+    },
+    #[serde(rename = "new_process")]
     NewProcess(NewProcess),
 }
 
@@ -141,11 +145,12 @@ async fn poll_subprocess_memory_usage<F>(
     main_pid: u32,
     period: Duration,
     mut write_record: F,
-) -> FailureOr<()>
+) -> ErrorOr<()>
 where
-    F: FnMut(Record) -> FailureOr<()>,
+    F: FnMut(Record) -> ErrorOr<()>,
 {
     let mut last_seen_pids: HashSet<u32> = HashSet::new();
+    let start_time = Instant::now();
 
     loop {
         let next_check = Instant::now() + period;
@@ -192,7 +197,10 @@ where
 
         last_seen_pids = mem_map.iter().map(|x| x.pid).collect();
         mem_map.sort_by_key(|x| x.pid);
-        write_record(Record::MemInfo(mem_map))?;
+        write_record(Record::MemInfo{
+            millis_elapsed: start_time.elapsed().as_millis() as u64,
+            processes: mem_map,
+        })?;
         tokio::time::delay_until(next_check.into()).await;
     }
 }
@@ -234,17 +242,17 @@ async fn run_monitored_subproc(
     mut command: tokio::process::Command,
     log_file: String,
     log_period: Duration,
-) -> FailureOr<i32> {
+) -> ErrorOr<i32> {
     command.kill_on_drop(true);
 
-    let mut log_file = fs::File::create(log_file)?;
-    let running = command.spawn()?;
+    let mut log_file = tr!(fs::File::create(log_file));
+    let running = tr!(command.spawn());
     let pid = running.id();
 
     let monitor = async move {
-        let write_record = move |rec: Record| -> FailureOr<()> {
-            serde_json::to_writer(&mut log_file, &rec)?;
-            write!(log_file, "\n")?;
+        let write_record = move |rec: Record| -> ErrorOr<()> {
+            tr!(serde_json::to_writer(&mut log_file, &rec));
+            tr!(write!(log_file, "\n"));
             Ok(())
         };
         match poll_subprocess_memory_usage(pid, log_period, write_record).await {
@@ -273,7 +281,7 @@ async fn run_monitored_subproc(
     .await)
 }
 
-fn main() -> FailureOr<()> {
+fn main() -> ErrorOr<()> {
     let matches = clap::App::new("memtrack")
         .arg(
             clap::Arg::with_name("log_file")
@@ -341,7 +349,7 @@ fn main() -> FailureOr<()> {
     if let Some(tcmalloc_prefix) = matches.value_of("tcmalloc_profile_prefix") {
         tcmalloc_enabled = true;
 
-        fs::create_dir_all(&tcmalloc_prefix)?;
+        tr!(fs::create_dir_all(&tcmalloc_prefix));
         subprocess.env("HEAPPROFILE", tcmalloc_prefix);
     }
 
@@ -354,7 +362,7 @@ fn main() -> FailureOr<()> {
         subprocess.env("LD_PRELOAD", "/usr/lib/x86_64-linux-gnu/libtcmalloc.so.4");
     }
 
-    let exit_code = tokio::runtime::Runtime::new()?
+    let exit_code = tr!(tokio::runtime::Runtime::new())
         .block_on(run_monitored_subproc(subprocess, log_file, log_period))?;
     std::process::exit(exit_code);
 }
