@@ -2,8 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::future::Future;
 use std::io;
-use std::io::Read;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -135,7 +134,7 @@ struct PIDMemInfo {
 #[serde(tag = "type", content = "value")]
 enum Record {
     #[serde(rename = "mem_info")]
-    MemInfo{
+    MemInfo {
         millis_elapsed: u64,
         processes: Vec<PIDMemInfo>,
     },
@@ -183,7 +182,7 @@ where
                 });
             }
 
-            mem_map.push(PIDMemInfo{
+            mem_map.push(PIDMemInfo {
                 pid,
                 mem_info: match read_subprocess_memory_usage(pid) {
                     None => continue,
@@ -199,7 +198,7 @@ where
 
         last_seen_pids = mem_map.iter().map(|x| x.pid).collect();
         mem_map.sort_by_key(|x| x.pid);
-        write_record(Record::MemInfo{
+        write_record(Record::MemInfo {
             millis_elapsed: start_time.elapsed().as_millis() as u64,
             processes: mem_map,
         })?;
