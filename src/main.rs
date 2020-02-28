@@ -126,6 +126,7 @@ struct NewProcess {
 
 #[derive(Serialize)]
 struct PIDMemInfo {
+    #[serde(flatten)]
     mem_info: MemInfo,
     pid: u32,
 }
@@ -133,7 +134,12 @@ struct PIDMemInfo {
 #[derive(Serialize)]
 #[serde(tag = "type", content = "value")]
 enum Record {
-    MemInfo(Vec<PIDMemInfo>),
+    #[serde(rename = "mem_info")]
+    MemInfo{
+        millis_elapsed: u64,
+        processes: Vec<PIDMemInfo>,
+    },
+    #[serde(rename = "new_process")]
     NewProcess(NewProcess),
 }
 
@@ -146,6 +152,7 @@ where
     F: FnMut(Record) -> FailureOr<()>,
 {
     let mut last_seen_pids: HashSet<u32> = HashSet::new();
+    let start_time = Instant::now();
 
     loop {
         let next_check = Instant::now() + period;
@@ -192,7 +199,10 @@ where
 
         last_seen_pids = mem_map.iter().map(|x| x.pid).collect();
         mem_map.sort_by_key(|x| x.pid);
-        write_record(Record::MemInfo(mem_map))?;
+        write_record(Record::MemInfo{
+            millis_elapsed: start_time.elapsed().as_millis() as u64,
+            processes: mem_map,
+        })?;
         tokio::time::delay_until(next_check.into()).await;
     }
 }
